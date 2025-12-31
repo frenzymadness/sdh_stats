@@ -40,6 +40,54 @@ class EventStatistics:
     # Backend stores times in CET/CEST but marks them as UTC
     BACKEND_TIMEZONE = 'Europe/Prague'
 
+    @classmethod
+    def resolve_unit_name(cls, unit_name):
+        """
+        Resolve unit name to unit ID using the API.
+
+        Args:
+            unit_name: Name of the unit to search for
+
+        Returns:
+            Unit ID if exactly one match is found
+
+        Raises:
+            SystemExit: If no matches or multiple matches are found
+        """
+        print(f"Hledám jednotku '{unit_name}'...")
+
+        # URL encode the unit name and build the query URL
+        encoded_name = urllib.parse.quote(unit_name)
+        url = f'{cls.BASE_URL}/jednotky?term={encoded_name}'
+
+        try:
+            units = cls._download_json(url)
+        except Exception as e:
+            print(f"Chyba při dotazu na API: {e}", file=sys.stderr)
+            sys.exit(1)
+
+        if not units:
+            print(f"Chyba: Jednotka '{unit_name}' nebyla nalezena.", file=sys.stderr)
+            print("Zkuste jiný název nebo použijte --unit s ID jednotky.", file=sys.stderr)
+            sys.exit(1)
+
+        if len(units) == 1:
+            unit = units[0]
+            print(f"Nalezena jednotka: {unit['nazev']} (ID: {unit['id']})")
+            return unit['id']
+
+        # Multiple matches found
+        print(f"Nalezeno {len(units)} jednotek odpovídajících názvu '{unit_name}':", file=sys.stderr)
+        print(file=sys.stderr)
+        for i, unit in enumerate(units, 1):
+            print(f"  {i}. {unit['nazev']} (ID: {unit['id']})", file=sys.stderr)
+        print(file=sys.stderr)
+        print("Prosím, zvolte jednu z možností:", file=sys.stderr)
+        print("  - Použijte přesnější název s parametrem --unit-name", file=sys.stderr)
+        print("  - Nebo použijte ID přímo s parametrem --unit", file=sys.stderr)
+        print(f"    Příklad: --unit {units[0]['id']}", file=sys.stderr)
+        sys.exit(1)
+
     def __init__(self, events_file='udalosti.json', types_file='typy.json', subtypes_file='podtypy.json', states_file='stavy.json'):
         """Initialize with data files."""
         self.events = self._load_json(events_file)
@@ -725,8 +773,9 @@ def main():
         description='Výpočet statistik událostí hasičů',
         epilog='Příklady:\n'
                '  %(prog)s --from 2025-01-01 --to 2025-12-31 --unit 8102157\n'
+               '  %(prog)s --from 2025-01-01 --to 2025-12-31 --unit-name Morávka\n'
                '  %(prog)s --from 2025-01-01 --to 2025-12-31 --unit 8102157 --save\n'
-               '  %(prog)s --from 2025-01-01 --to 2025-12-31 --unit 8102157 --export-csv --export-plots\n'
+               '  %(prog)s --from 2025-01-01 --to 2025-12-31 --unit-name "Morávka" --export-csv --export-plots\n'
                '  %(prog)s --export-plots (použije lokální JSON soubory a vytvoří grafy)',
         formatter_class=argparse.RawDescriptionHelpFormatter
     )
@@ -737,8 +786,11 @@ def main():
                           help='Počáteční datum (RRRR-MM-DD nebo RRRR-MM-DDTHH:MM:SS.SSSZ)')
     web_group.add_argument('--to', dest='to_date', metavar='DATUM',
                           help='Koncové datum (RRRR-MM-DD nebo RRRR-MM-DDTHH:MM:SS.SSSZ)')
-    web_group.add_argument('--unit', dest='unit_id', metavar='ID',
+    unit_group = web_group.add_mutually_exclusive_group()
+    unit_group.add_argument('--unit', dest='unit_id', metavar='ID',
                           help='ID jednotky (např. 8102157)')
+    unit_group.add_argument('--unit-name', dest='unit_name', metavar='NÁZEV',
+                          help='Název jednotky (např. Morávka) - bude automaticky přeloženo na ID')
     web_group.add_argument('--save', action='store_true',
                           help='Uložit stažená data do lokálních JSON souborů pro pozdější použití')
 
@@ -765,15 +817,21 @@ def main():
     args = parser.parse_args()
 
     # Check if we should download from web
-    use_web = args.from_date or args.to_date or args.unit_id
+    use_web = args.from_date or args.to_date or args.unit_id or args.unit_name
 
     if use_web:
         # Validate that all web parameters are provided
-        if not (args.from_date and args.to_date and args.unit_id):
-            parser.error('Při stahování z webu jsou povinné parametry --from, --to a --unit')
+        if not (args.from_date and args.to_date and (args.unit_id or args.unit_name)):
+            parser.error('Při stahování z webu jsou povinné parametry --from, --to a (--unit nebo --unit-name)')
+
+        # Resolve unit name to ID if unit_name is provided
+        if args.unit_name:
+            unit_id = EventStatistics.resolve_unit_name(args.unit_name)
+        else:
+            unit_id = args.unit_id
 
         # Download from web
-        calculator = EventStatistics.from_web(args.from_date, args.to_date, args.unit_id,
+        calculator = EventStatistics.from_web(args.from_date, args.to_date, unit_id,
                                              save_to_files=args.save)
     else:
         # Use local files
@@ -784,8 +842,11 @@ def main():
             print("\nLokální datové soubory nenalezeny. Máte dvě možnosti:\n", file=sys.stderr)
             print("1. Stáhnout data z webu pomocí:", file=sys.stderr)
             print(f"   python3 {sys.argv[0]} --from RRRR-MM-DD --to RRRR-MM-DD --unit ID_JEDNOTKY", file=sys.stderr)
-            print(f"\n   Příklad:", file=sys.stderr)
+            print(f"   nebo", file=sys.stderr)
+            print(f"   python3 {sys.argv[0]} --from RRRR-MM-DD --to RRRR-MM-DD --unit-name NÁZEV_JEDNOTKY", file=sys.stderr)
+            print(f"\n   Příklady:", file=sys.stderr)
             print(f"   python3 {sys.argv[0]} --from 2025-01-01 --to 2025-12-31 --unit 8102157", file=sys.stderr)
+            print(f"   python3 {sys.argv[0]} --from 2025-01-01 --to 2025-12-31 --unit-name Morávka", file=sys.stderr)
             print("\n2. Nebo zajistit, že tyto soubory existují v aktuálním adresáři:", file=sys.stderr)
             print(f"   - {args.events}", file=sys.stderr)
             print(f"   - {args.types}", file=sys.stderr)
