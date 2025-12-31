@@ -175,10 +175,12 @@ class EventStatistics:
             print('Nenalezeny žádné jednotky tohoto jména.')
             sys.exit(1)
         elif len(units) == 1:
+            print(f'  Nalezena jednotka {units[0]["nazev"]} - ID {units[0]["id"]}')
             return units[0]['id']
         else:
             result = cls._best_unit_match(unit_name, units)
             if result:
+                print(f'  Nalezena jednotka {result[0]["nazev"]} - ID {result[0]["id"]}')
                 return result[0]['id']
             else:
                 print('Něco se nepovedlo')
